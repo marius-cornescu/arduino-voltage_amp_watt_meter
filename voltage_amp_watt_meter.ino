@@ -9,7 +9,7 @@
   D1 -> RX
   D0 -> TX
   -------------------------------
-Sketch uses 4994 bytes (16%) of program storage space. Maximum is 30720 bytes.
+Sketch uses 5412 bytes (17%) of program storage space. Maximum is 30720 bytes.
 Global variables use 83 bytes (4%) of dynamic memory, leaving 1965 bytes for local variables. Maximum is 2048 bytes.
   -------------------------------
 */
@@ -19,7 +19,7 @@ Global variables use 83 bytes (4%) of dynamic memory, leaving 1965 bytes for loc
 #define RAW_AMPS_PIN A1
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#define DEBUG
+//#define DEBUG
 //#define DEBUG_V
 //#define UseCOMMPro
 
@@ -32,19 +32,20 @@ Global variables use 83 bytes (4%) of dynamic memory, leaving 1965 bytes for loc
 const byte LED_INDICATOR_PIN = LED_BUILTIN;  // choose the pin for the LED // D13
 //------------------------------------------------
 const float OPERATING_VOLTAGE = 5.0;
+const float OPERATING_MILLI_AMPS = 75.0;
 
-const byte MEASUREMENT_ITERATIONS = 200;
-const float MEASUREMENT_RESOLUTION = 1024.0; // Nano = 10 bits
+const unsigned int MEASUREMENT_ITERATIONS = 200;
+const float ANALOG_RESOLUTION = 1024.0; // Nano = 10 bits
+const float MILLI = 1000.0;
 
-const byte ACS_SENSITIVITY = 66; // x05B (5A) = 185 || x20A = 100 || x30A = 66
-const int AMPS_CORECTION = 514;
-const byte AMPS_FACTOR = 15;
+const unsigned int ACS_SENSITIVITY = 66; // x05B (5A) = 185 || x20A = 100 || x30A = 66
+const unsigned int AMPS_FACTOR = 250;
 //
 //= VARIABLES ======================================================================================
 // initialize the interface pins
 LiquidCrystal lcd(2, 3, 4, 5, 6, 7);
-int rawSupply, rawVolt, rawAmpere;
-long supply, volt_mV, current, power, ah;
+unsigned int rawVolt, rawAmpere;
+long volt_mV, current_mA, power, ah;
 // the 8 arrays that form each segment of the custom numbers
 unsigned long msec = 0;
 float time = 0.0;
@@ -91,6 +92,7 @@ void loop() {
   //
   _printVoltageAmpsPower();
   _displayVoltageAmpsPower();
+
   //
   //comm_ActOnNewDataToSend();
   //
@@ -102,54 +104,29 @@ void loop() {
 //==================================================================================================
 void _readVoltageAmpsPower() {
   for (int i = 0; i < MEASUREMENT_ITERATIONS; i++) {
-    rawAmpere = analogRead(RAW_AMPS_PIN);
-    rawVolt = analogRead(RAW_VOLT_PIN);
-    rawSupply = _readVcc();
+    rawVolt = _readVcc();
+    rawAmpere = _computeVoltage(analogRead(RAW_AMPS_PIN), 1000);
+
     volt_mV = volt_mV + rawVolt;
-    current = current + rawAmpere;
-    supply = supply + rawSupply;
+    current_mA = current_mA + rawAmpere;
     delay(1);
   }
 
-  supply = (supply / MEASUREMENT_ITERATIONS);
-  debugPrint("AVG supply = ");debugPrintln(supply);
-  volt_mV = supply / 10;
+  volt_mV = (volt_mV / MEASUREMENT_ITERATIONS);
 
+  current_mA = (current_mA / MEASUREMENT_ITERATIONS);
+  current_mA = (OPERATING_VOLTAGE*MILLI/2.0 - current_mA) / ACS_SENSITIVITY; // (2.5 - (AvgAcs * (5.0 / 1024.0)) ) / 0.185;
+  if (current_mA < 1) current_mA = 0;
+  current_mA = current_mA * AMPS_FACTOR + OPERATING_MILLI_AMPS;
 
-  current = (current / MEASUREMENT_ITERATIONS);
-  debugPrint("AVG amp = ");debugPrintln(current);
-  power = current;
-
-  float avg_volt = (current * supply)/MEASUREMENT_RESOLUTION;
-  debugPrint("AVG volt = ");debugPrintln(avg_volt);
-  ampHours = avg_volt;
-
-
-  current = (OPERATING_VOLTAGE/2 - avg_volt) / (ACS_SENSITIVITY/1000.0); // (2.5 - (AvgAcs * (5.0 / 1024.0)) ) / 0.185;
-  //if (current < 1) current = 0;
-}
-//==================================================================================================
-void _readVoltageAmpsPower2() {
-  for (int i = 0; i < MEASUREMENT_ITERATIONS; i++) {
-    rawAmpere = analogRead(A1);
-    rawVolt = analogRead(A0);
-    volt_mV = volt_mV + rawVolt;
-    current = current + rawAmpere;
-    delay(1);
-  }
-
-  current = (current / MEASUREMENT_ITERATIONS - 514);
-  if (current < 1) current = 0;
-  current = current * 15;
-  volt_mV = volt_mV / 30;
-  power = (volt_mV * current) / 1000;
+  power = (volt_mV * current_mA) / MILLI;
   //--------------------
   sample = sample + 1;
-
+  //
   msec = millis();
-
+  //
   time = (float)msec / 1000.0;
-  totalCharge = totalCharge + (current);
+  totalCharge = totalCharge + (current_mA);
   averageAmps = totalCharge / sample;
   ampSeconds = averageAmps * time;
   ampHours = ampSeconds / 3600;
@@ -167,29 +144,35 @@ void _displayVoltageAmpsPower() {
   displayValue = (volt_mV / 10) % 10;
   lcd.setCursor(4, 0);
   lcd.print(displayValue);
-  lcd.setCursor(3, 0);
-  lcd.print(".");
   displayValue = (volt_mV / 100) % 10;
-  lcd.setCursor(2, 0);
+  lcd.setCursor(3, 0);
   lcd.print(displayValue);
+  lcd.setCursor(2, 0);
+  lcd.print(".");
   displayValue = (volt_mV / 1000) % 10;
   lcd.setCursor(1, 0);
-  if (volt > 999) lcd.print(displayValue);
+  lcd.print(displayValue);
+  displayValue = (volt_mV / 10000) % 10;
+  lcd.setCursor(0, 0);
+  if (volt_mV > 9999) lcd.print(displayValue);
   else lcd.print(" ");
   //--------------------------------------
   lcd.setCursor(14, 0);
   lcd.print("A");
 
-  displayValue = current % 10;
+  displayValue = current_mA % 10;
   lcd.setCursor(13, 0);
   lcd.print(displayValue);
-  displayValue = (current / 10) % 10;
+  displayValue = (current_mA / 10) % 10;
   lcd.setCursor(12, 0);
   lcd.print(displayValue);
+  displayValue = (current_mA / 100) % 10;
   lcd.setCursor(11, 0);
-  lcd.print(".");
-  displayValue = (current / 100) % 10;
+  lcd.print(displayValue);
   lcd.setCursor(10, 0);
+  lcd.print(".");
+  displayValue = (current_mA / 1000) % 10;
+  lcd.setCursor(9, 0);
   lcd.print(displayValue);
   //--------------------------------------
   lcd.setCursor(6, 1);
@@ -199,44 +182,50 @@ void _displayVoltageAmpsPower() {
   lcd.setCursor(5, 1);
   lcd.print(displayValue);
   displayValue = (power / 10) % 10;
+  lcd.setCursor(4, 1);
+  lcd.print(displayValue);
+  displayValue = (power / 100) % 10;
   lcd.setCursor(3, 1);
   lcd.print(displayValue);
-  lcd.setCursor(4, 1);
-  lcd.print(".");
-  displayValue = (power / 100) % 10;
   lcd.setCursor(2, 1);
-  if (power > 99) lcd.print(displayValue);
-  else lcd.print(" ");
+  lcd.print(".");
   displayValue = (power / 1000) % 10;
   lcd.setCursor(1, 1);
-  if (power > 999) lcd.print(displayValue);
+  lcd.print(displayValue);
+  displayValue = (power / 10000) % 10;
+  lcd.setCursor(0, 1);
+  if (power > 9999) lcd.print(displayValue);
   else lcd.print(" ");
   //--------------------------------------
   lcd.setCursor(14, 1);
   lcd.print("Ah");
 
-  displayValue = ampHours % 10;
+  displayValue = (ampHours ) % 10;
   lcd.setCursor(13, 1);
   lcd.print(displayValue);
   displayValue = (ampHours / 10) % 10;
   lcd.setCursor(12, 1);
   lcd.print(displayValue);
-  lcd.setCursor(11, 1);
-  lcd.print(".");
   displayValue = (ampHours / 100) % 10;
-  lcd.setCursor(10, 1);
+  lcd.setCursor(11, 1);
   lcd.print(displayValue);
+  lcd.setCursor(10, 1);
+  lcd.print(".");
   displayValue = (ampHours / 1000) % 10;
   lcd.setCursor(9, 1);
   lcd.print(displayValue);
+  displayValue = (ampHours / 10000) % 10;
+  lcd.setCursor(8, 1);
+  if (power > 9999) lcd.print(displayValue);
+  else lcd.print(" ");
   //--------------------------------------
 }
 //==================================================================================================
 void _printVoltageAmpsPower() {
 #ifdef DEBUG_V
-  debugPrint(volt);
+  debugPrint(volt_mV);
   debugPrint("  ");
-  debugPrint(current);
+  debugPrint(current_mA);
   debugPrint("  ");
   debugPrint(power);
 
@@ -250,12 +239,12 @@ void _printVoltageAmpsPower() {
 //==================================================================================================
 //==================================================================================================
 float _computeVoltage(unsigned int raw_analog_value, int unit) {
-  float raw_voltage = raw_analog_value * OPERATING_VOLTAGE / 1024.0;
+  float raw_voltage = raw_analog_value * OPERATING_VOLTAGE / ANALOG_RESOLUTION;
   // read correct supply voltage
   long raw_vcc = _readVcc();
   float supply_voltage = raw_vcc * (unit / 1000.0);
   float corrected_voltage = supply_voltage / OPERATING_VOLTAGE * raw_voltage;
-  supply = round(supply_voltage);
+  //supply = round(supply_voltage);
 
 #ifdef DEBUG_VCC
   Serial.print("Vcc = ");
